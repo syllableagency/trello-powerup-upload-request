@@ -1,0 +1,14 @@
+{
+  "name": "Customer Approval Gatekeeper",
+  "details": "Requires customer approval verification upload and applies a Customer Approved label.",
+  "author": "Syllable Agency",
+  "capabilities": ["callback", "card-buttons"],
+  "icon": {
+    "url": "https://YOUR_DOMAIN/icon.png"
+  },
+  "connectors": {
+    "iframe": {
+      "url": "https://YOUR_DOMAIN/index.html"
+    }
+  }
+}
