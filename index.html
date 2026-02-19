@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Power-Up Connector</title>
+  </head>
+  <body>
+    <script src="https://p.trellocdn.com/power-up.min.js"></script>
+    <script>
+      const APP_KEY = "YOUR_APP_KEY";
+      const APP_NAME = "Customer Approval Gatekeeper";
+      const APP_AUTHOR = "Syllable Agency";
+
+      window.TrelloPowerUp.initialize(
+        {
+          "card-buttons": function (t) {
+            return [
+              {
+                text: "Upload Request",
+                icon: "https://YOUR_DOMAIN/icon.png",
+                callback: function (t) {
+                  return t.modal({
+                    title: "Customer Approval Verification",
+                    url: "./approval.html",
+                    height: 520
+                  });
+                }
+              }
+            ];
+          }
+        },
+        {
+          appKey: APP_KEY,
+          appName: APP_NAME,
+          appAuthor: APP_AUTHOR
+        }
+      );
+    </script>
+  </body>
+</html>
