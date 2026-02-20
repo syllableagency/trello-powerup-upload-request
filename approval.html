@@ -260,10 +260,24 @@
       }
 
       async function moveCardToList(cardId, token, listId) {
-        // Moving by idList can move the card across boards when the destination list is on another board.
+        const normalizedListId = String(listId || "").replace(/^list-/, "");
+        if (!normalizedListId) {
+          throw new Error("Destination list ID is missing.");
+        }
+
+        // Resolve destination board from the destination list so cross-board moves succeed.
+        const listUrl =
+          `https://api.trello.com/1/lists/${encodeURIComponent(normalizedListId)}?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
+          `&fields=id,idBoard,name`;
+        const list = await trelloFetchJson(listUrl, { method: "GET", headers: { "Accept": "application/json" } });
+        if (!list?.idBoard) {
+          throw new Error("Could not resolve destination board from target list.");
+        }
+
         const url =
           `https://api.trello.com/1/cards/${encodeURIComponent(cardId)}?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
-          `&idList=${encodeURIComponent(listId)}`;
+          `&idBoard=${encodeURIComponent(list.idBoard)}` +
+          `&idList=${encodeURIComponent(normalizedListId)}`;
 
         return trelloFetchJson(url, { method: "PUT", headers: { "Accept": "application/json" } });
       }
