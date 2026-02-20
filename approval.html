@@ -196,9 +196,20 @@
       }
 
       async function getCardContext() {
-        // Need card id + board id
-        const card = await t.card("id", "idBoard");
-        return { cardId: card.id, boardId: card.idBoard };
+        // Prefer explicit context passed from the card button callback.
+        const argCardId = t.arg("cardId");
+        const argBoardId = t.arg("boardId");
+        if (argCardId && argBoardId) {
+          return { cardId: argCardId, boardId: argBoardId };
+        }
+
+        // Fallback: fetch IDs from current Trello context.
+        const [card, board] = await Promise.all([t.card("id"), t.board("id")]);
+        if (!card?.id || !board?.id) {
+          throw new Error("Could not resolve card context. Reopen from a card and try again.");
+        }
+
+        return { cardId: card.id, boardId: board.id };
       }
 
       async function getExistingAttachments(cardId, token) {
@@ -249,13 +260,17 @@
 
       async function saveApprovalMeta(company, contact, attachmentName) {
         // Optional but great for accountability/auditing inside the Power-Up.
-        await t.set("card", "shared", "customerApproval", {
-          approved: true,
-          company,
-          contact,
-          attachmentName,
-          approvedAt: new Date().toISOString()
-        });
+        try {
+          await t.set("card", "shared", "customerApproval", {
+            approved: true,
+            company,
+            contact,
+            attachmentName,
+            approvedAt: new Date().toISOString()
+          });
+        } catch (e) {
+          // Do not fail the workflow if plugin-data write is unavailable.
+        }
       }
 
       // Wire up buttons
