@@ -10,7 +10,9 @@
       const APP_KEY = "51c30a2cb14666510ff4905d9d4eae07";
       const APP_NAME = "Customer Approval Gatekeeper";
       const APP_AUTHOR = "Syllable Agency";
-      const APP_VERSION = "2026-02-20-4";
+      const APP_VERSION = "2026-02-20-5";
+      const CARD_BUTTON_ICON_URL =
+        `https://syllableagency.github.io/trello-powerup-upload-request/icon-card-button.svg?v=${encodeURIComponent(APP_VERSION)}`;
 
       window.TrelloPowerUp.initialize(
         {
@@ -18,7 +20,7 @@
             return [
               {
                 text: "Upload Request",
-                icon: "https://syllableagency.github.io/trello-powerup-upload-request/icon.png",
+                icon: CARD_BUTTON_ICON_URL,
                 callback: async function (t) {
                   const [card, board] = await Promise.all([t.card("id"), t.board("id")]);
                   const modalUrl =
