@@ -14,7 +14,7 @@
       .actions { display:flex; gap: 10px; margin-top: 14px; }
       button { padding: 9px 12px; cursor: pointer; }
       .error { color: #b42318; font-size: 13px; margin-top: 8px; white-space: pre-line; }
-      .note { color:#555; font-size: 12px; margin-top: 6px; }
+      .note { color:#d1d1d1; font-size: 12px; margin-top: 6px; }
       .busy { opacity: 0.7; pointer-events:none; }
       .success { color: #1f7a1f; font-size: 13px; margin-top: 8px; }
       .hr { height: 1px; background: #e6e6e6; margin: 12px 0; }
@@ -36,7 +36,7 @@
     <form id="form">
       <div class="field">
         <label>
-          <input id="approved" type="checkbox" />
+          <input id="approved" type="checkbox" required />
           This design has been approved by the customer
         </label>
       </div>
@@ -55,7 +55,8 @@
       <div class="field">
         <label for="file">Upload approval file (required)</label>
         <input id="file" type="file" required />
-        <div class="note">This will be attached to the card as "Customer Approval Verification...".</div>
+        <div class="note">This can be a signed print, screenshot of an email, or similar proof of customer approval.</div>
+        <div class="note">This will be attached to the card as "Customer Approval Verification".</div>
       </div>
 
       <div class="actions">
