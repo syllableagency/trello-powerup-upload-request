@@ -78,6 +78,7 @@
       const BASE_ATTACHMENT_NAME = "Customer Approval Verification";
       const APPROVED_LABEL_NAME = "Customer Approved";
       const APPROVED_LABEL_COLOR = "green";
+      const TARGET_LIST_ID = "5d1393e0184e28237c1a59a6";
 
       const t = window.TrelloPowerUp.iframe({
         appKey: APP_KEY,
@@ -258,6 +259,15 @@
         return trelloFetchJson(url, { method: "POST", headers: { "Accept": "application/json" } });
       }
 
+      async function moveCardToList(cardId, token, listId) {
+        // Moving by idList can move the card across boards when the destination list is on another board.
+        const url =
+          `https://api.trello.com/1/cards/${encodeURIComponent(cardId)}?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
+          `&idList=${encodeURIComponent(listId)}`;
+
+        return trelloFetchJson(url, { method: "PUT", headers: { "Accept": "application/json" } });
+      }
+
       async function saveApprovalMeta(company, contact, attachmentName) {
         // Optional but great for accountability/auditing inside the Power-Up.
         try {
@@ -337,11 +347,15 @@
           const labelId = await findOrCreateApprovedLabel(boardId, token);
           await applyLabelToCard(cardId, labelId, token);
 
+          // Move card to Document Control destination list.
+          setStatus("Moving card to Document Control...");
+          await moveCardToList(cardId, token, TARGET_LIST_ID);
+
           // Save meta
           setStatus("Saving verification details...");
           await saveApprovalMeta(company, contact, attachmentDisplayName);
 
-          setSuccess("Done. Attachment uploaded and card marked Customer Approved.");
+          setSuccess("Done. Attachment uploaded, card marked Customer Approved, and moved to Document Control.");
           setStatus("");
 
           // Close after a beat so user sees success
