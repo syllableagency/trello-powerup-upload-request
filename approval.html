@@ -55,7 +55,7 @@
       <div class="field">
         <label for="file">Upload approval file (required)</label>
         <input id="file" type="file" required />
-        <div class="note">This will be attached to the card as “Customer Approval Verification…”.</div>
+        <div class="note">This will be attached to the card as "Customer Approval Verification...".</div>
       </div>
 
       <div class="actions">
@@ -70,7 +70,8 @@
 
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
     <script>
-      const APP_KEY = "YOUR_APP_KEY";
+      const DEFAULT_APP_KEY = "51c30a2cb14666510ff4905d9d4eae07";
+      const APP_KEY = new URLSearchParams(window.location.search).get("appKey") || DEFAULT_APP_KEY;
       const APP_NAME = "Customer Approval Gatekeeper";
       const APP_AUTHOR = "Syllable Agency";
 
@@ -96,7 +97,26 @@
       function setAuthError(msg) { $("authError").textContent = msg || ""; }
       function setSuccess(msg) { $("success").textContent = msg || ""; }
 
+      function isAppKeyConfigured() {
+        return Boolean(APP_KEY);
+      }
+
+      async function clearStoredToken() {
+        try {
+          const client = await t.getRestApi();
+          await client.clearToken();
+        } catch (e) {
+          // Swallow token-clear failures; auth retry should still be allowed.
+        }
+      }
+
       async function ensureAuthorized() {
+        if (!isAppKeyConfigured()) {
+          $("authBlock").style.display = "block";
+          setAuthError("Power-Up app key is not configured. Update DEFAULT_APP_KEY in approval.html.");
+          return false;
+        }
+
         const client = await t.getRestApi();
         const ok = await client.isAuthorized();
         if (ok) return true;
@@ -109,6 +129,11 @@
 
       async function doAuthorize() {
         setAuthError("");
+        if (!isAppKeyConfigured()) {
+          $("authBlock").style.display = "block";
+          setAuthError("Power-Up app key is not configured. Update DEFAULT_APP_KEY in approval.html.");
+          return false;
+        }
         setBusy(true);
         try {
           const client = await t.getRestApi();
@@ -120,6 +145,7 @@
           $("authBlock").style.display = "none";
           return true;
         } catch (e) {
+          await clearStoredToken();
           setAuthError("Authorization was cancelled or failed.\n" + (e?.message || String(e)));
           return false;
         } finally {
@@ -162,7 +188,11 @@
 
       async function getToken() {
         const client = await t.getRestApi();
-        return client.getToken();
+        const token = await client.getToken();
+        if (!token) {
+          throw new Error("Authorization token is missing. Click Authorize and try again.");
+        }
+        return token;
       }
 
       async function getCardContext() {
@@ -177,7 +207,7 @@
       }
 
       async function uploadAttachment(cardId, token, file, attachmentDisplayName) {
-        // Create Attachment on Card supports query params including `name` and `file`. :contentReference[oaicite:3]{index=3}
+        // Create attachment using multipart form data plus display name.
         const url = `https://api.trello.com/1/cards/${encodeURIComponent(cardId)}/attachments?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}&name=${encodeURIComponent(attachmentDisplayName)}`;
 
         const form = new FormData();
@@ -197,7 +227,7 @@
         );
         if (found?.id) return found.id;
 
-        // Create label on board: POST /labels?name=&color=&idBoard=  :contentReference[oaicite:4]{index=4}
+        // Create label on board if it does not already exist.
         const createUrl =
           `https://api.trello.com/1/labels?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
           `&name=${encodeURIComponent(APPROVED_LABEL_NAME)}` +
@@ -209,7 +239,7 @@
       }
 
       async function applyLabelToCard(cardId, labelId, token) {
-        // Use the dedicated "add label" endpoint so we don't overwrite existing labels. :contentReference[oaicite:5]{index=5}
+        // Use the dedicated "add label" endpoint so we do not overwrite existing labels.
         const url =
           `https://api.trello.com/1/cards/${encodeURIComponent(cardId)}/idLabels?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
           `&value=${encodeURIComponent(labelId)}`;
@@ -253,10 +283,10 @@
         const file = $("file").files && $("file").files[0];
 
         const problems = [];
-        if (!approved) problems.push("• You must confirm the customer approved the design.");
-        if (!company) problems.push("• Customer Company is required.");
-        if (!contact) problems.push("• Customer Contact Name is required.");
-        if (!file) problems.push("• You must upload an approval file.");
+        if (!approved) problems.push("- You must confirm the customer approved the design.");
+        if (!company) problems.push("- Customer Company is required.");
+        if (!contact) problems.push("- Customer Contact Name is required.");
+        if (!file) problems.push("- You must upload an approval file.");
 
         if (problems.length) {
           setError("Please fix the following:\n" + problems.join("\n"));
@@ -274,26 +304,26 @@
             return;
           }
 
-          setStatus("Preparing upload…");
+          setStatus("Preparing upload...");
           const token = await getToken();
           const { cardId, boardId } = await getCardContext();
 
           // Determine next attachment name
-          setStatus("Checking existing attachments…");
+          setStatus("Checking existing attachments...");
           const existing = await getExistingAttachments(cardId, token);
           const attachmentDisplayName = computeNextAttachmentName(existing || []);
 
           // Upload attachment
-          setStatus(`Uploading as “${attachmentDisplayName}”…`);
+          setStatus(`Uploading as "${attachmentDisplayName}"...`);
           await uploadAttachment(cardId, token, file, attachmentDisplayName);
 
           // Label: find/create then apply
-          setStatus("Applying “Customer Approved” label…");
+          setStatus('Applying "Customer Approved" label...');
           const labelId = await findOrCreateApprovedLabel(boardId, token);
           await applyLabelToCard(cardId, labelId, token);
 
           // Save meta
-          setStatus("Saving verification details…");
+          setStatus("Saving verification details...");
           await saveApprovalMeta(company, contact, attachmentDisplayName);
 
           setSuccess("Done. Attachment uploaded and card marked Customer Approved.");

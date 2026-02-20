@@ -4,11 +4,11 @@
   "author": "Syllable Agency",
   "capabilities": ["callback", "card-buttons"],
   "icon": {
-    "url": "https://YOUR_DOMAIN/icon.png"
+    "url": "https://syllableagency.github.io/trello-powerup-upload-request/icon.png"
   },
   "connectors": {
     "iframe": {
-      "url": "https://YOUR_DOMAIN/index.html"
+      "url": "https://syllableagency.github.io/trello-powerup-upload-request/index.html"
     }
   }
 }

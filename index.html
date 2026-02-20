@@ -19,9 +19,10 @@
                 text: "Upload Request",
                 icon: "https://syllableagency.github.io/trello-powerup-upload-request/icon.png",
                 callback: function (t) {
+                  const modalUrl = `./approval.html?appKey=${encodeURIComponent(APP_KEY)}`;
                   return t.modal({
                     title: "Customer Approval Verification",
-                    url: "./approval.html",
+                    url: modalUrl,
                     height: 520
                   });
                 }
