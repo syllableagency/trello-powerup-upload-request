@@ -79,7 +79,8 @@
       const BASE_ATTACHMENT_NAME = "Customer Approval Verification";
       const APPROVED_LABEL_NAME = "Customer Approved";
       const APPROVED_LABEL_COLOR = "green";
-      const TARGET_LIST_ID = "5d1393e0184e28237c1a59a6";
+      const DESTINATION_SETTINGS_KEY = "destinationSettings";
+      const DEFAULT_TARGET_LIST_ID = "5d1393e0184e28237c1a59a6";
 
       const t = window.TrelloPowerUp.iframe({
         appKey: APP_KEY,
@@ -260,7 +261,25 @@
         return trelloFetchJson(url, { method: "POST", headers: { "Accept": "application/json" } });
       }
 
-      async function moveCardToList(cardId, token, listId) {
+      async function getDestinationConfig() {
+        const saved = await t.get("board", "shared", DESTINATION_SETTINGS_KEY) || {};
+        const configuredBoardId = String(saved.boardId || "").trim();
+        const configuredListId = String(saved.listId || "").trim().replace(/^list-/, "");
+
+        if (configuredListId) {
+          return {
+            boardId: configuredBoardId,
+            listId: configuredListId
+          };
+        }
+
+        return {
+          boardId: "",
+          listId: String(DEFAULT_TARGET_LIST_ID || "").trim().replace(/^list-/, "")
+        };
+      }
+
+      async function moveCardToList(cardId, token, listId, configuredBoardId) {
         const normalizedListId = String(listId || "").replace(/^list-/, "");
         if (!normalizedListId) {
           throw new Error("Destination list ID is missing.");
@@ -273,6 +292,9 @@
         const list = await trelloFetchJson(listUrl, { method: "GET", headers: { "Accept": "application/json" } });
         if (!list?.idBoard) {
           throw new Error("Could not resolve destination board from target list.");
+        }
+        if (configuredBoardId && configuredBoardId !== list.idBoard) {
+          throw new Error("Configured destination list does not belong to configured destination board. Open Power-Up settings and re-save destination.");
         }
 
         const url =
@@ -362,15 +384,16 @@
           const labelId = await findOrCreateApprovedLabel(boardId, token);
           await applyLabelToCard(cardId, labelId, token);
 
-          // Move card to Document Control destination list.
-          setStatus("Moving card to Document Control...");
-          await moveCardToList(cardId, token, TARGET_LIST_ID);
+          // Move card to the configured destination list.
+          setStatus("Moving card to destination list...");
+          const destination = await getDestinationConfig();
+          await moveCardToList(cardId, token, destination.listId, destination.boardId);
 
           // Save meta
           setStatus("Saving verification details...");
           await saveApprovalMeta(company, contact, attachmentDisplayName);
 
-          setSuccess("Done. Attachment uploaded, card marked Customer Approved, and moved to Document Control.");
+          setSuccess("Done. Attachment uploaded, card marked Customer Approved, and moved to the destination list.");
           setStatus("");
 
           // Close after a beat so user sees success

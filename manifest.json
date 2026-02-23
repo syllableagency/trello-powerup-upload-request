@@ -2,13 +2,13 @@
   "name": "Customer Approval Gatekeeper",
   "details": "Requires customer approval verification upload and applies a Customer Approved label.",
   "author": "Syllable Agency",
-  "capabilities": ["callback", "card-buttons"],
+  "capabilities": ["callback", "card-buttons", "show-settings"],
   "icon": {
     "url": "https://syllableagency.github.io/trello-powerup-upload-request/icon.png"
   },
   "connectors": {
     "iframe": {
-      "url": "https://syllableagency.github.io/trello-powerup-upload-request/index.html?v=2026-02-20-5"
+      "url": "https://syllableagency.github.io/trello-powerup-upload-request/index.html?v=2026-02-20-6"
     }
   }
 }

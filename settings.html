@@ -1,0 +1,367 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Upload Request Settings</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 14px; }
+      .field { margin-bottom: 12px; }
+      label { display:block; font-size: 13px; margin-bottom: 6px; }
+      select { width: 100%; padding: 8px; box-sizing: border-box; }
+      .actions { display:flex; gap: 10px; margin-top: 14px; }
+      button { padding: 9px 12px; cursor: pointer; }
+      .error { color: #b42318; font-size: 13px; margin-top: 8px; white-space: pre-line; }
+      .note { color:#555; font-size: 12px; margin-top: 6px; }
+      .success { color: #1f7a1f; font-size: 13px; margin-top: 8px; }
+      .busy { opacity: 0.7; pointer-events:none; }
+      .hr { height: 1px; background: #e6e6e6; margin: 12px 0; }
+    </style>
+  </head>
+  <body>
+    <div id="authBlock" class="field" style="display:none;">
+      <div class="note">Authorize to load your boards/lists and save destination settings.</div>
+      <div class="actions">
+        <button id="btnAuthorize" type="button">Authorize</button>
+        <button id="btnCloseA" type="button">Close</button>
+      </div>
+      <div id="authError" class="error"></div>
+      <div class="hr"></div>
+    </div>
+
+    <form id="form">
+      <div class="field">
+        <label for="boardSelect">Destination Board</label>
+        <select id="boardSelect" required>
+          <option value="">Select a board...</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="listSelect">Destination List</label>
+        <select id="listSelect" required>
+          <option value="">Select a list...</option>
+        </select>
+      </div>
+
+      <div class="actions">
+        <button id="btnSave" type="submit">Save Destination</button>
+        <button id="btnClose" type="button">Close</button>
+      </div>
+
+      <div class="note">These settings are saved at board level and used by card approvals on this board.</div>
+      <div id="status" class="note"></div>
+      <div id="error" class="error"></div>
+      <div id="success" class="success"></div>
+    </form>
+
+    <script src="https://p.trellocdn.com/power-up.min.js"></script>
+    <script>
+      const DEFAULT_APP_KEY = "51c30a2cb14666510ff4905d9d4eae07";
+      const APP_KEY = new URLSearchParams(window.location.search).get("appKey") || DEFAULT_APP_KEY;
+      const APP_NAME = "Customer Approval Gatekeeper";
+      const APP_AUTHOR = "Syllable Agency";
+      const DESTINATION_SETTINGS_KEY = "destinationSettings";
+
+      const t = window.TrelloPowerUp.iframe({
+        appKey: APP_KEY,
+        appName: APP_NAME,
+        appAuthor: APP_AUTHOR
+      });
+
+      const $ = (id) => document.getElementById(id);
+      let boardCanWrite = true;
+
+      function setBusy(isBusy) {
+        $("form").classList.toggle("busy", isBusy);
+        $("authBlock").classList.toggle("busy", isBusy);
+      }
+
+      function setStatus(msg) { $("status").textContent = msg || ""; }
+      function setError(msg) { $("error").textContent = msg || ""; }
+      function setSuccess(msg) { $("success").textContent = msg || ""; }
+      function setAuthError(msg) { $("authError").textContent = msg || ""; }
+
+      function setControlsEnabled(enabled) {
+        $("boardSelect").disabled = !enabled;
+        $("listSelect").disabled = !enabled;
+        $("btnSave").disabled = !enabled;
+      }
+
+      function isAppKeyConfigured() {
+        return Boolean(APP_KEY);
+      }
+
+      async function clearStoredToken() {
+        try {
+          const client = await t.getRestApi();
+          await client.clearToken();
+        } catch (e) {
+          // Ignore clearToken failures; user can still retry auth.
+        }
+      }
+
+      async function ensureAuthorized() {
+        if (!isAppKeyConfigured()) {
+          $("authBlock").style.display = "block";
+          setAuthError("Power-Up app key is not configured. Update DEFAULT_APP_KEY in settings.html.");
+          return false;
+        }
+
+        const client = await t.getRestApi();
+        const ok = await client.isAuthorized();
+        if (ok) return true;
+
+        $("authBlock").style.display = "block";
+        setAuthError("");
+        return false;
+      }
+
+      async function doAuthorize() {
+        setAuthError("");
+        if (!isAppKeyConfigured()) {
+          $("authBlock").style.display = "block";
+          setAuthError("Power-Up app key is not configured. Update DEFAULT_APP_KEY in settings.html.");
+          return false;
+        }
+        setBusy(true);
+        try {
+          const client = await t.getRestApi();
+          await client.authorize({
+            scope: "read,write",
+            expiration: "never"
+          });
+          $("authBlock").style.display = "none";
+          return true;
+        } catch (e) {
+          await clearStoredToken();
+          setAuthError("Authorization was cancelled or failed.\n" + (e?.message || String(e)));
+          return false;
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function getToken() {
+        const client = await t.getRestApi();
+        const token = await client.getToken();
+        if (!token) {
+          throw new Error("Authorization token is missing. Click Authorize and try again.");
+        }
+        return token;
+      }
+
+      async function trelloFetchJson(url, opts) {
+        const res = await fetch(url, opts);
+        const text = await res.text();
+        let json;
+        try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+        if (!res.ok) {
+          const msg = json?.message || json?.error || text || `HTTP ${res.status}`;
+          throw new Error(msg);
+        }
+        return json;
+      }
+
+      async function fetchBoards(token) {
+        const url =
+          `https://api.trello.com/1/members/me/boards?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
+          `&fields=id,name,closed&filter=open`;
+        const boards = await trelloFetchJson(url, { method: "GET", headers: { "Accept": "application/json" } });
+        return (boards || []).filter(b => b && b.id && !b.closed).sort((a, b) => a.name.localeCompare(b.name));
+      }
+
+      async function fetchLists(boardId, token) {
+        const url =
+          `https://api.trello.com/1/boards/${encodeURIComponent(boardId)}/lists?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
+          `&fields=id,name,closed&filter=open`;
+        const lists = await trelloFetchJson(url, { method: "GET", headers: { "Accept": "application/json" } });
+        return (lists || []).filter(l => l && l.id && !l.closed);
+      }
+
+      function replaceOptions(selectEl, items, placeholder) {
+        selectEl.innerHTML = "";
+        const first = document.createElement("option");
+        first.value = "";
+        first.textContent = placeholder;
+        selectEl.appendChild(first);
+        for (const item of items) {
+          const opt = document.createElement("option");
+          opt.value = item.id;
+          opt.textContent = item.name || item.id;
+          selectEl.appendChild(opt);
+        }
+      }
+
+      async function canWriteBoardSettings() {
+        if (typeof t.memberCanWriteToModel !== "function") {
+          return true;
+        }
+        try {
+          return Boolean(await t.memberCanWriteToModel("board"));
+        } catch (e) {
+          return true;
+        }
+      }
+
+      async function isBoardAdmin(token) {
+        try {
+          const [board, member] = await Promise.all([t.board("id"), t.member("id")]);
+          if (!board?.id || !member?.id) {
+            return false;
+          }
+
+          const url =
+            `https://api.trello.com/1/boards/${encodeURIComponent(board.id)}/memberships?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
+            `&fields=idMember,memberType`;
+          const memberships = await trelloFetchJson(url, { method: "GET", headers: { "Accept": "application/json" } });
+          const mine = (memberships || []).find(m => m && m.idMember === member.id);
+          return mine?.memberType === "admin";
+        } catch (e) {
+          return false;
+        }
+      }
+
+      async function loadSettingsUI(existingToken) {
+        setError("");
+        setSuccess("");
+        setStatus("Loading settings...");
+        const token = existingToken || await getToken();
+        const [saved, boardCtx, boards] = await Promise.all([
+          t.get("board", "shared", DESTINATION_SETTINGS_KEY),
+          t.board("id"),
+          fetchBoards(token)
+        ]);
+
+        const boardSelect = $("boardSelect");
+        const listSelect = $("listSelect");
+        replaceOptions(boardSelect, boards, "Select a board...");
+        replaceOptions(listSelect, [], "Select a list...");
+
+        const currentBoardId = boardCtx?.id || "";
+        const savedBoardId = String(saved?.boardId || "").trim();
+        const savedListId = String(saved?.listId || "").trim();
+        let selectedBoardId = savedBoardId || currentBoardId || (boards[0] && boards[0].id) || "";
+
+        if (selectedBoardId && !boards.some(b => b.id === selectedBoardId)) {
+          const fallback = document.createElement("option");
+          fallback.value = selectedBoardId;
+          fallback.textContent = `Configured board (${selectedBoardId})`;
+          boardSelect.appendChild(fallback);
+        }
+
+        boardSelect.value = selectedBoardId;
+        if (selectedBoardId) {
+          const lists = await fetchLists(selectedBoardId, token);
+          replaceOptions(listSelect, lists, "Select a list...");
+          if (savedListId && !lists.some(l => l.id === savedListId)) {
+            const missing = document.createElement("option");
+            missing.value = savedListId;
+            missing.textContent = `Configured list (${savedListId})`;
+            listSelect.appendChild(missing);
+          }
+          listSelect.value = savedListId;
+        }
+
+        setStatus("");
+      }
+
+      async function handleBoardChange() {
+        setError("");
+        setSuccess("");
+        const boardId = $("boardSelect").value;
+        const listSelect = $("listSelect");
+        replaceOptions(listSelect, [], "Select a list...");
+        if (!boardId) return;
+
+        setBusy(true);
+        setStatus("Loading lists...");
+        try {
+          const token = await getToken();
+          const lists = await fetchLists(boardId, token);
+          replaceOptions(listSelect, lists, "Select a list...");
+          setStatus("");
+        } catch (e) {
+          setStatus("");
+          setError(e?.message || String(e));
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      $("btnClose").addEventListener("click", () => t.closeModal());
+      $("btnCloseA").addEventListener("click", () => t.closeModal());
+
+      $("btnAuthorize").addEventListener("click", async () => {
+        const ok = await doAuthorize();
+        if (ok) {
+          const token = await getToken();
+          const [canWrite, isAdmin] = await Promise.all([canWriteBoardSettings(), isBoardAdmin(token)]);
+          boardCanWrite = canWrite && isAdmin;
+          setControlsEnabled(boardCanWrite);
+          await loadSettingsUI(token);
+          if (!isAdmin) {
+            setError("Only board admins can change these settings.");
+          } else if (!canWrite) {
+            setError("Only board members with board write access can change these settings.");
+          }
+        }
+      });
+
+      $("boardSelect").addEventListener("change", handleBoardChange);
+
+      $("form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        setError("");
+        setSuccess("");
+
+        if (!boardCanWrite) {
+          setError("You do not have permission to change board settings.");
+          return;
+        }
+
+        const boardId = $("boardSelect").value;
+        const listId = $("listSelect").value;
+        if (!boardId || !listId) {
+          setError("Please choose both destination board and destination list.");
+          return;
+        }
+
+        setBusy(true);
+        setStatus("Saving settings...");
+        try {
+          const member = await t.member("id");
+          await t.set("board", "shared", DESTINATION_SETTINGS_KEY, {
+            boardId,
+            listId,
+            updatedAt: new Date().toISOString(),
+            updatedBy: member?.id || ""
+          });
+          setStatus("");
+          setSuccess("Destination saved. Future approvals on this board will use this board/list.");
+        } catch (err) {
+          setStatus("");
+          setError(err?.message || String(err));
+        } finally {
+          setBusy(false);
+        }
+      });
+
+      t.render(async () => {
+        setControlsEnabled(false);
+        const authed = await ensureAuthorized();
+        if (!authed) return;
+
+        const token = await getToken();
+        const [canWrite, isAdmin] = await Promise.all([canWriteBoardSettings(), isBoardAdmin(token)]);
+        boardCanWrite = canWrite && isAdmin;
+        setControlsEnabled(boardCanWrite);
+        await loadSettingsUI(token);
+        if (!isAdmin) {
+          setError("Only board admins can change these settings.");
+        } else if (!canWrite) {
+          setError("Only board members with board write access can change these settings.");
+        }
+      });
+    </script>
+  </body>
+</html>
