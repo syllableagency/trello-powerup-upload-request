@@ -9,6 +9,29 @@
       label { display:block; font-size: 13px; margin-bottom: 6px; }
       input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; }
       input[type="file"] { width: 100%; }
+      .drop-zone {
+        border: 2px dashed #c8ccd0;
+        border-radius: 8px;
+        padding: 12px;
+        background: #f6f8fa;
+        color: #172b4d;
+        cursor: pointer;
+      }
+      .drop-zone.active {
+        border-color: #0c66e4;
+        background: #e9f2ff;
+      }
+      .drop-zone.disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .proof-box {
+        border: 1px solid #e1e4e8;
+        border-radius: 8px;
+        padding: 10px;
+      }
+      .proof-option { margin-bottom: 8px; }
+      .proof-option:last-child { margin-bottom: 0; }
       .row { display:flex; gap: 10px; }
       .row > div { flex: 1; }
       .actions { display:flex; gap: 10px; margin-top: 14px; }
@@ -53,10 +76,37 @@
       </div>
 
       <div class="field">
+        <label for="designParts">Design Part Name(s) / Number(s) (required)</label>
+        <input id="designParts" type="text" required placeholder="Example: Panel A, Decal 1042-B" />
+      </div>
+
+      <div class="field proof-box">
+        <label>Approval Proof Method (required)</label>
+        <label class="proof-option">
+          <input id="proofUpload" name="proofMethod" type="radio" value="upload" checked />
+          Upload proof file
+        </label>
+        <label class="proof-option">
+          <input id="proofSign" name="proofMethod" type="radio" value="sign" />
+          Digitally sign instead (adds a comment to the card)
+        </label>
+      </div>
+
+      <div id="fileBlock" class="field">
         <label for="file">Upload approval file (required)</label>
-        <input id="file" type="file" required />
+        <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-controls="file">
+          Drag and drop a file here, or click to choose one.
+        </div>
+        <input id="file" type="file" />
+        <div id="fileName" class="note"></div>
         <div class="note">This can be a signed print, screenshot of an email, or similar proof of customer approval.</div>
         <div class="note">This will be attached to the card as "Customer Approval Verification".</div>
+      </div>
+
+      <div id="signBlock" class="field" style="display:none;">
+        <div class="note">
+          No file upload will be required. A card comment will be added stating that you signed to confirm customer approval.
+        </div>
       </div>
 
       <div class="actions">
@@ -79,6 +129,8 @@
       const BASE_ATTACHMENT_NAME = "Customer Approval Verification";
       const APPROVED_LABEL_NAME = "Customer Approved";
       const APPROVED_LABEL_COLOR = "green";
+      const PROOF_METHOD_UPLOAD = "upload";
+      const PROOF_METHOD_SIGN = "sign";
       const DESTINATION_SETTINGS_KEY = "destinationSettings";
       const DEFAULT_TARGET_LIST_ID = "5d1393e0184e28237c1a59a6";
 
@@ -89,6 +141,7 @@
       });
 
       const $ = (id) => document.getElementById(id);
+      let selectedProofFile = null;
 
       function setBusy(isBusy) {
         $("form").classList.toggle("busy", isBusy);
@@ -99,6 +152,90 @@
       function setError(msg) { $("error").textContent = msg || ""; }
       function setAuthError(msg) { $("authError").textContent = msg || ""; }
       function setSuccess(msg) { $("success").textContent = msg || ""; }
+      function getProofMethod() {
+        return $("proofSign").checked ? PROOF_METHOD_SIGN : PROOF_METHOD_UPLOAD;
+      }
+      function isUploadProof() {
+        return getProofMethod() === PROOF_METHOD_UPLOAD;
+      }
+      function updateProofMethodUI() {
+        const uploadMode = isUploadProof();
+        $("fileBlock").style.display = uploadMode ? "block" : "none";
+        $("signBlock").style.display = uploadMode ? "none" : "block";
+        $("dropZone").classList.toggle("disabled", !uploadMode);
+        if (!uploadMode) {
+          $("dropZone").classList.remove("active");
+        }
+      }
+      function setSelectedProofFile(file) {
+        selectedProofFile = file || null;
+        $("fileName").textContent = selectedProofFile ? `Selected file: ${selectedProofFile.name}` : "";
+      }
+      function getSelectedProofFile() {
+        return selectedProofFile || (($("file").files && $("file").files[0]) || null);
+      }
+      function syncSelectedFileFromInput() {
+        setSelectedProofFile(($("file").files && $("file").files[0]) || null);
+      }
+      function tryAssignInputFile(file) {
+        try {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          $("file").files = dt.files;
+        } catch (e) {
+          // Some environments block programmatic file assignment; we still track the dropped file in memory.
+        }
+      }
+      function handleDroppedFile(file) {
+        if (!file || !isUploadProof()) return;
+        tryAssignInputFile(file);
+        setSelectedProofFile(file);
+      }
+      function wireDragAndDrop() {
+        const dropZone = $("dropZone");
+        const prevent = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        };
+
+        dropZone.addEventListener("click", () => {
+          if (!isUploadProof()) return;
+          $("file").click();
+        });
+
+        dropZone.addEventListener("keydown", (e) => {
+          if (!isUploadProof()) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            $("file").click();
+          }
+        });
+
+        ["dragenter", "dragover"].forEach((eventName) => {
+          dropZone.addEventListener(eventName, (e) => {
+            prevent(e);
+            if (!isUploadProof()) return;
+            dropZone.classList.add("active");
+          });
+        });
+
+        ["dragleave", "dragend"].forEach((eventName) => {
+          dropZone.addEventListener(eventName, (e) => {
+            prevent(e);
+            dropZone.classList.remove("active");
+          });
+        });
+
+        dropZone.addEventListener("drop", (e) => {
+          prevent(e);
+          dropZone.classList.remove("active");
+          if (!isUploadProof()) return;
+
+          const files = e.dataTransfer && e.dataTransfer.files;
+          if (!files || !files.length) return;
+          handleDroppedFile(files[0]);
+        });
+      }
 
       function isAppKeyConfigured() {
         return Boolean(APP_KEY);
@@ -196,6 +333,23 @@
           throw new Error("Authorization token is missing. Click Authorize and try again.");
         }
         return token;
+      }
+
+      async function getCurrentMemberDisplayName() {
+        try {
+          const member = await t.member("fullName", "username");
+          if (member?.fullName) return member.fullName;
+          if (member?.username) return member.username;
+        } catch (e) {
+          // Fall back to API lookup below.
+        }
+
+        const token = await getToken();
+        const url =
+          `https://api.trello.com/1/members/me?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
+          `&fields=fullName,username`;
+        const me = await trelloFetchJson(url, { method: "GET", headers: { "Accept": "application/json" } });
+        return me?.fullName || me?.username || "A user";
       }
 
       async function getCardContext() {
@@ -305,13 +459,32 @@
         return trelloFetchJson(url, { method: "PUT", headers: { "Accept": "application/json" } });
       }
 
-      async function saveApprovalMeta(company, contact, attachmentName) {
+      async function addApprovalSignatureComment(cardId, token, signerName, designParts) {
+        const safeSigner = (signerName || "A user").trim() || "A user";
+        const safeParts = (designParts || "").trim();
+        const commentLines = [
+          `${safeSigner} has signed to confirm customer approval of this design.`,
+          safeParts ? `Approved design parts/numbers: ${safeParts}` : ""
+        ].filter(Boolean);
+        const commentText = commentLines.join("\n");
+
+        const url =
+          `https://api.trello.com/1/cards/${encodeURIComponent(cardId)}/actions/comments?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
+          `&text=${encodeURIComponent(commentText)}`;
+
+        return trelloFetchJson(url, { method: "POST", headers: { "Accept": "application/json" } });
+      }
+
+      async function saveApprovalMeta(company, contact, designParts, proofMethod, attachmentName, signerName) {
         // Optional but great for accountability/auditing inside the Power-Up.
         try {
           await t.set("card", "shared", "customerApproval", {
             approved: true,
             company,
             contact,
+            designParts,
+            proofMethod,
+            signerName: signerName || "",
             attachmentName,
             approvedAt: new Date().toISOString()
           });
@@ -323,10 +496,15 @@
       // Wire up buttons
       $("btnClose").addEventListener("click", () => t.closeModal());
       $("btnCloseA").addEventListener("click", () => t.closeModal());
+      $("proofUpload").addEventListener("change", updateProofMethodUI);
+      $("proofSign").addEventListener("change", updateProofMethodUI);
+      $("file").addEventListener("change", syncSelectedFileFromInput);
       $("btnAuthorize").addEventListener("click", async () => {
         const ok = await doAuthorize();
         if (ok) $("authBlock").style.display = "none";
       });
+      wireDragAndDrop();
+      updateProofMethodUI();
 
       // On render, show auth UI if needed
       t.render(async () => {
@@ -342,13 +520,18 @@
         const approved = $("approved").checked;
         const company = $("company").value.trim();
         const contact = $("contact").value.trim();
-        const file = $("file").files && $("file").files[0];
+        const designParts = $("designParts").value.trim();
+        const proofMethod = getProofMethod();
+        const file = getSelectedProofFile();
 
         const problems = [];
         if (!approved) problems.push("- You must confirm the customer approved the design.");
         if (!company) problems.push("- Customer Company is required.");
         if (!contact) problems.push("- Customer Contact Name is required.");
-        if (!file) problems.push("- You must upload an approval file.");
+        if (!designParts) problems.push("- Design Part Name(s) / Number(s) is required.");
+        if (proofMethod === PROOF_METHOD_UPLOAD && !file) {
+          problems.push("- You must upload an approval file, or choose the digital signature option.");
+        }
 
         if (problems.length) {
           setError("Please fix the following:\n" + problems.join("\n"));
@@ -371,13 +554,21 @@
           const { cardId, boardId } = await getCardContext();
 
           // Determine next attachment name
-          setStatus("Checking existing attachments...");
-          const existing = await getExistingAttachments(cardId, token);
-          const attachmentDisplayName = computeNextAttachmentName(existing || []);
+          let attachmentDisplayName = "";
+          let signerName = "";
+          if (proofMethod === PROOF_METHOD_UPLOAD) {
+            setStatus("Checking existing attachments...");
+            const existing = await getExistingAttachments(cardId, token);
+            attachmentDisplayName = computeNextAttachmentName(existing || []);
 
-          // Upload attachment
-          setStatus(`Uploading as "${attachmentDisplayName}"...`);
-          await uploadAttachment(cardId, token, file, attachmentDisplayName);
+            // Upload attachment
+            setStatus(`Uploading as "${attachmentDisplayName}"...`);
+            await uploadAttachment(cardId, token, file, attachmentDisplayName);
+          } else {
+            setStatus("Adding digital signature comment...");
+            signerName = await getCurrentMemberDisplayName();
+            await addApprovalSignatureComment(cardId, token, signerName, designParts);
+          }
 
           // Label: find/create then apply
           setStatus('Applying "Customer Approved" label...');
@@ -391,9 +582,13 @@
 
           // Save meta
           setStatus("Saving verification details...");
-          await saveApprovalMeta(company, contact, attachmentDisplayName);
+          await saveApprovalMeta(company, contact, designParts, proofMethod, attachmentDisplayName, signerName);
 
-          setSuccess("Done. Attachment uploaded, card marked Customer Approved, and moved to the destination list.");
+          if (proofMethod === PROOF_METHOD_UPLOAD) {
+            setSuccess("Done. Attachment uploaded, card marked Customer Approved, and moved to the destination list.");
+          } else {
+            setSuccess("Done. Digital signature comment added, card marked Customer Approved, and moved to the destination list.");
+          }
           setStatus("");
 
           // Close after a beat so user sees success
