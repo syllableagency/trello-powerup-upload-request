@@ -611,14 +611,49 @@
         return trelloFetchJson(url, { method: "PUT", headers: { "Accept": "application/json" } });
       }
 
-      async function addApprovalSignatureComment(cardId, token, signerName, designParts) {
-        const safeSigner = (signerName || "A user").trim() || "A user";
-        const safeParts = (designParts || "").trim();
-        const commentLines = [
-          `${safeSigner} has signed to confirm customer approval of this design.`,
-          safeParts ? `Approved design parts/numbers: ${safeParts}` : ""
-        ].filter(Boolean);
-        const commentText = commentLines.join("\n");
+      function formatAuditFieldValue(value, fallback) {
+        const normalized = String(value || "").replace(/\s+/g, " ").trim();
+        return normalized || fallback || "(not provided)";
+      }
+
+      function buildApprovalAuditComment(data) {
+        const isUpload = data.proofMethod === PROOF_METHOD_UPLOAD;
+        const signer = formatAuditFieldValue(data.signerName, "A user");
+        const company = formatAuditFieldValue(data.company);
+        const contact = formatAuditFieldValue(data.contact);
+        const designParts = formatAuditFieldValue(data.designParts);
+        const recordedAtIso = formatAuditFieldValue(data.recordedAtIso, new Date().toISOString());
+        const attachmentNames = Array.isArray(data.attachmentNames) ? data.attachmentNames.map((name) => formatAuditFieldValue(name)).filter(Boolean) : [];
+        const proofFilesLine = isUpload
+          ? (attachmentNames.length ? attachmentNames.join("; ") : "(not provided)")
+          : "None (digital signature only)";
+        const statementLine = isUpload
+          ? `${signer} has uploaded customer approval for the listed parts/numbers.`
+          : `${signer} has signed to confirm customer approval of this design.`;
+
+        return [
+          "[Customer Approval Record]",
+          `Action: ${isUpload ? "Upload Proof" : "Digital Signature"}`,
+          `Recorded At (UTC): ${recordedAtIso}`,
+          `Trello User: ${signer}`,
+          `Customer: ${company}`,
+          `Customer Contact: ${contact}`,
+          `Approved Parts/Numbers: ${designParts}`,
+          `Proof Files: ${proofFilesLine}`,
+          `Statement: ${statementLine}`
+        ].join("\n");
+      }
+
+      async function addApprovalSignatureComment(cardId, token, signerName, company, contact, designParts, recordedAtIso) {
+        const commentText = buildApprovalAuditComment({
+          proofMethod: PROOF_METHOD_SIGN,
+          signerName,
+          company,
+          contact,
+          designParts,
+          attachmentNames: [],
+          recordedAtIso
+        });
 
         const url =
           `https://api.trello.com/1/cards/${encodeURIComponent(cardId)}/actions/comments?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
@@ -627,15 +662,16 @@
         return trelloFetchJson(url, { method: "POST", headers: { "Accept": "application/json" } });
       }
 
-      async function addApprovalUploadComment(cardId, token, signerName, designParts, attachmentNames) {
-        const safeSigner = (signerName || "A user").trim() || "A user";
-        const safeParts = (designParts || "").trim();
-        const safeNames = Array.isArray(attachmentNames) ? attachmentNames.filter(Boolean) : [];
-        const commentLines = [
-          `${safeSigner} has uploaded customer approval for parts/numbers: ${safeParts}.`,
-          safeNames.length ? `Approval proof file${safeNames.length === 1 ? "" : "s"}: ${safeNames.join(", ")}` : ""
-        ].filter(Boolean);
-        const commentText = commentLines.join("\n");
+      async function addApprovalUploadComment(cardId, token, signerName, company, contact, designParts, attachmentNames, recordedAtIso) {
+        const commentText = buildApprovalAuditComment({
+          proofMethod: PROOF_METHOD_UPLOAD,
+          signerName,
+          company,
+          contact,
+          designParts,
+          attachmentNames,
+          recordedAtIso
+        });
 
         const url =
           `https://api.trello.com/1/cards/${encodeURIComponent(cardId)}/actions/comments?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
@@ -644,7 +680,7 @@
         return trelloFetchJson(url, { method: "POST", headers: { "Accept": "application/json" } });
       }
 
-      async function saveApprovalMeta(company, contact, designParts, proofMethod, attachmentNames, signerName) {
+      async function saveApprovalMeta(company, contact, designParts, proofMethod, attachmentNames, signerName, approvedAtIso) {
         // Optional but great for accountability/auditing inside the Power-Up.
         try {
           const normalizedAttachmentNames = Array.isArray(attachmentNames) ? attachmentNames.filter(Boolean) : [];
@@ -657,7 +693,7 @@
             signerName: signerName || "",
             attachmentName: normalizedAttachmentNames[0] || "",
             attachmentNames: normalizedAttachmentNames,
-            approvedAt: new Date().toISOString()
+            approvedAt: approvedAtIso || new Date().toISOString()
           });
         } catch (e) {
           // Do not fail the workflow if plugin-data write is unavailable.
@@ -729,6 +765,7 @@
           setStatus("Preparing upload...");
           const token = await getToken();
           const { cardId, boardId } = await getCardContext();
+          const approvalRecordedAt = new Date().toISOString();
 
           // Determine next attachment name
           let attachmentDisplayNames = [];
@@ -747,11 +784,11 @@
             }
 
             setStatus("Adding upload comment...");
-            await addApprovalUploadComment(cardId, token, signerName, designParts, attachmentDisplayNames);
+            await addApprovalUploadComment(cardId, token, signerName, company, contact, designParts, attachmentDisplayNames, approvalRecordedAt);
           } else {
             setStatus("Adding digital signature comment...");
             signerName = await getCurrentMemberDisplayName();
-            await addApprovalSignatureComment(cardId, token, signerName, designParts);
+            await addApprovalSignatureComment(cardId, token, signerName, company, contact, designParts, approvalRecordedAt);
           }
 
           // Label: find/create then apply
@@ -766,7 +803,7 @@
 
           // Save meta
           setStatus("Saving verification details...");
-          await saveApprovalMeta(company, contact, designParts, proofMethod, attachmentDisplayNames, signerName);
+          await saveApprovalMeta(company, contact, designParts, proofMethod, attachmentDisplayNames, signerName, approvalRecordedAt);
           if (companySelection === CUSTOMER_NOT_LISTED) {
             await maybeAddCustomerToBoardList(company);
           }
