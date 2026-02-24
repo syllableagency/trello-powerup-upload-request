@@ -95,9 +95,9 @@
       <div id="fileBlock" class="field">
         <label for="file">Upload approval file (required)</label>
         <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-controls="file">
-          Drag and drop a file here, or click to choose one.
+          Drag and drop file(s) here, or click to choose file(s).
         </div>
-        <input id="file" type="file" />
+        <input id="file" type="file" multiple />
         <div id="fileName" class="note"></div>
         <div class="note">This can be a signed print, screenshot of an email, or similar proof of customer approval.</div>
         <div class="note">This will be attached to the card as "Customer Approval Verification".</div>
@@ -141,7 +141,7 @@
       });
 
       const $ = (id) => document.getElementById(id);
-      let selectedProofFile = null;
+      let selectedProofFiles = [];
 
       function setBusy(isBusy) {
         $("form").classList.toggle("busy", isBusy);
@@ -167,29 +167,48 @@
           $("dropZone").classList.remove("active");
         }
       }
-      function setSelectedProofFile(file) {
-        selectedProofFile = file || null;
-        $("fileName").textContent = selectedProofFile ? `Selected file: ${selectedProofFile.name}` : "";
+      function setSelectedProofFiles(files) {
+        selectedProofFiles = Array.isArray(files) ? files.filter(Boolean) : [];
+        if (!selectedProofFiles.length) {
+          $("fileName").textContent = "";
+          return;
+        }
+
+        if (selectedProofFiles.length === 1) {
+          $("fileName").textContent = `Selected file: ${selectedProofFiles[0].name}`;
+          return;
+        }
+
+        const previewNames = selectedProofFiles.slice(0, 3).map((file) => file.name).join(", ");
+        const remainingCount = selectedProofFiles.length - 3;
+        $("fileName").textContent =
+          remainingCount > 0
+            ? `Selected ${selectedProofFiles.length} files: ${previewNames}, +${remainingCount} more`
+            : `Selected ${selectedProofFiles.length} files: ${previewNames}`;
       }
-      function getSelectedProofFile() {
-        return selectedProofFile || (($("file").files && $("file").files[0]) || null);
+      function getSelectedProofFiles() {
+        if (selectedProofFiles.length) return selectedProofFiles.slice();
+        return Array.from(($("file").files || []));
       }
-      function syncSelectedFileFromInput() {
-        setSelectedProofFile(($("file").files && $("file").files[0]) || null);
+      function syncSelectedFilesFromInput() {
+        setSelectedProofFiles(Array.from(($("file").files || [])));
       }
-      function tryAssignInputFile(file) {
+      function tryAssignInputFiles(files) {
         try {
           const dt = new DataTransfer();
-          dt.items.add(file);
+          for (const file of files) {
+            dt.items.add(file);
+          }
           $("file").files = dt.files;
         } catch (e) {
           // Some environments block programmatic file assignment; we still track the dropped file in memory.
         }
       }
-      function handleDroppedFile(file) {
-        if (!file || !isUploadProof()) return;
-        tryAssignInputFile(file);
-        setSelectedProofFile(file);
+      function handleDroppedFiles(files) {
+        const droppedFiles = Array.from(files || []).filter(Boolean);
+        if (!droppedFiles.length || !isUploadProof()) return;
+        tryAssignInputFiles(droppedFiles);
+        setSelectedProofFiles(droppedFiles);
       }
       function wireDragAndDrop() {
         const dropZone = $("dropZone");
@@ -233,7 +252,7 @@
 
           const files = e.dataTransfer && e.dataTransfer.files;
           if (!files || !files.length) return;
-          handleDroppedFile(files[0]);
+          handleDroppedFiles(files);
         });
       }
 
@@ -293,13 +312,9 @@
         }
       }
 
-      function computeNextAttachmentName(existingAttachments) {
-        // Count attachments whose display name matches:
-        // Customer Approval Verification
-        // Customer Approval Verification_1
-        // Customer Approval Verification_2
-        // ...
-        const re = new RegExp("^" + BASE_ATTACHMENT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?:_(\\d+))?$");
+      function getMaxApprovalAttachmentIndex(existingAttachments) {
+        // Support both old names ("_1") and current names (" 1").
+        const re = new RegExp("^" + BASE_ATTACHMENT_NAME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?:[ _](\\d+))?$");
         let maxN = -1;
 
         for (const a of existingAttachments) {
@@ -309,9 +324,23 @@
           else maxN = Math.max(maxN, parseInt(m[1], 10));
         }
 
-        if (maxN < 0) return BASE_ATTACHMENT_NAME;      // none exist
-        if (maxN === 0) return BASE_ATTACHMENT_NAME + "_1"; // base exists, next is _1
-        return BASE_ATTACHMENT_NAME + "_" + (maxN + 1);
+        return maxN;
+      }
+
+      function computeNextAttachmentNames(existingAttachments, count) {
+        const safeCount = Math.max(0, Number(count) || 0);
+        if (!safeCount) return [];
+
+        const maxN = getMaxApprovalAttachmentIndex(existingAttachments || []);
+        let nextN = maxN < 0 ? 0 : maxN + 1;
+        const names = [];
+
+        for (let i = 0; i < safeCount; i += 1) {
+          names.push(nextN === 0 ? BASE_ATTACHMENT_NAME : `${BASE_ATTACHMENT_NAME} ${nextN}`);
+          nextN += 1;
+        }
+
+        return names;
       }
 
       async function trelloFetchJson(url, opts) {
@@ -475,9 +504,27 @@
         return trelloFetchJson(url, { method: "POST", headers: { "Accept": "application/json" } });
       }
 
-      async function saveApprovalMeta(company, contact, designParts, proofMethod, attachmentName, signerName) {
+      async function addApprovalUploadComment(cardId, token, signerName, designParts, attachmentNames) {
+        const safeSigner = (signerName || "A user").trim() || "A user";
+        const safeParts = (designParts || "").trim();
+        const safeNames = Array.isArray(attachmentNames) ? attachmentNames.filter(Boolean) : [];
+        const commentLines = [
+          `${safeSigner} has uploaded customer approval for parts/numbers: ${safeParts}.`,
+          safeNames.length ? `Approval proof file${safeNames.length === 1 ? "" : "s"}: ${safeNames.join(", ")}` : ""
+        ].filter(Boolean);
+        const commentText = commentLines.join("\n");
+
+        const url =
+          `https://api.trello.com/1/cards/${encodeURIComponent(cardId)}/actions/comments?key=${encodeURIComponent(APP_KEY)}&token=${encodeURIComponent(token)}` +
+          `&text=${encodeURIComponent(commentText)}`;
+
+        return trelloFetchJson(url, { method: "POST", headers: { "Accept": "application/json" } });
+      }
+
+      async function saveApprovalMeta(company, contact, designParts, proofMethod, attachmentNames, signerName) {
         // Optional but great for accountability/auditing inside the Power-Up.
         try {
+          const normalizedAttachmentNames = Array.isArray(attachmentNames) ? attachmentNames.filter(Boolean) : [];
           await t.set("card", "shared", "customerApproval", {
             approved: true,
             company,
@@ -485,7 +532,8 @@
             designParts,
             proofMethod,
             signerName: signerName || "",
-            attachmentName,
+            attachmentName: normalizedAttachmentNames[0] || "",
+            attachmentNames: normalizedAttachmentNames,
             approvedAt: new Date().toISOString()
           });
         } catch (e) {
@@ -498,7 +546,7 @@
       $("btnCloseA").addEventListener("click", () => t.closeModal());
       $("proofUpload").addEventListener("change", updateProofMethodUI);
       $("proofSign").addEventListener("change", updateProofMethodUI);
-      $("file").addEventListener("change", syncSelectedFileFromInput);
+      $("file").addEventListener("change", syncSelectedFilesFromInput);
       $("btnAuthorize").addEventListener("click", async () => {
         const ok = await doAuthorize();
         if (ok) $("authBlock").style.display = "none";
@@ -522,15 +570,15 @@
         const contact = $("contact").value.trim();
         const designParts = $("designParts").value.trim();
         const proofMethod = getProofMethod();
-        const file = getSelectedProofFile();
+        const files = getSelectedProofFiles();
 
         const problems = [];
         if (!approved) problems.push("- You must confirm the customer approved the design.");
         if (!company) problems.push("- Customer Company is required.");
         if (!contact) problems.push("- Customer Contact Name is required.");
         if (!designParts) problems.push("- Design Part Name(s) / Number(s) is required.");
-        if (proofMethod === PROOF_METHOD_UPLOAD && !file) {
-          problems.push("- You must upload an approval file, or choose the digital signature option.");
+        if (proofMethod === PROOF_METHOD_UPLOAD && !files.length) {
+          problems.push("- You must upload at least one approval file, or choose the digital signature option.");
         }
 
         if (problems.length) {
@@ -554,16 +602,23 @@
           const { cardId, boardId } = await getCardContext();
 
           // Determine next attachment name
-          let attachmentDisplayName = "";
+          let attachmentDisplayNames = [];
           let signerName = "";
           if (proofMethod === PROOF_METHOD_UPLOAD) {
             setStatus("Checking existing attachments...");
             const existing = await getExistingAttachments(cardId, token);
-            attachmentDisplayName = computeNextAttachmentName(existing || []);
+            attachmentDisplayNames = computeNextAttachmentNames(existing || [], files.length);
+            signerName = await getCurrentMemberDisplayName();
 
-            // Upload attachment
-            setStatus(`Uploading as "${attachmentDisplayName}"...`);
-            await uploadAttachment(cardId, token, file, attachmentDisplayName);
+            // Upload attachment(s)
+            for (let i = 0; i < files.length; i += 1) {
+              const attachmentDisplayName = attachmentDisplayNames[i];
+              setStatus(`Uploading file ${i + 1} of ${files.length} as "${attachmentDisplayName}"...`);
+              await uploadAttachment(cardId, token, files[i], attachmentDisplayName);
+            }
+
+            setStatus("Adding upload comment...");
+            await addApprovalUploadComment(cardId, token, signerName, designParts, attachmentDisplayNames);
           } else {
             setStatus("Adding digital signature comment...");
             signerName = await getCurrentMemberDisplayName();
@@ -582,10 +637,10 @@
 
           // Save meta
           setStatus("Saving verification details...");
-          await saveApprovalMeta(company, contact, designParts, proofMethod, attachmentDisplayName, signerName);
+          await saveApprovalMeta(company, contact, designParts, proofMethod, attachmentDisplayNames, signerName);
 
           if (proofMethod === PROOF_METHOD_UPLOAD) {
-            setSuccess("Done. Attachment uploaded, card marked Customer Approved, and moved to the destination list.");
+            setSuccess("Done. Approval proof uploaded, comment added, card marked Customer Approved, and moved to the destination list.");
           } else {
             setSuccess("Done. Digital signature comment added, card marked Customer Approved, and moved to the destination list.");
           }
