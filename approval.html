@@ -7,7 +7,7 @@
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 14px; }
       .field { margin-bottom: 12px; }
       label { display:block; font-size: 13px; margin-bottom: 6px; }
-      input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; }
+      input[type="text"], select { width: 100%; padding: 8px; box-sizing: border-box; }
       input[type="file"] { width: 100%; }
       .drop-zone {
         border: 2px dashed #c8ccd0;
@@ -66,8 +66,15 @@
 
       <div class="row">
         <div class="field">
-          <label for="company">Customer Company (required)</label>
-          <input id="company" type="text" required />
+          <label for="companySelect">Customer Name (required)</label>
+          <select id="companySelect" required>
+            <option value="">Loading customers...</option>
+          </select>
+        </div>
+        <div class="field" id="companyCustomField" style="display:none;">
+          <label for="companyCustom">Enter Customer Name (required)</label>
+          <input id="companyCustom" type="text" />
+          <div class="note">This customer will be added to the customer list for future use.</div>
         </div>
         <div class="field">
           <label for="contact">Customer Contact Name (required)</label>
@@ -77,7 +84,7 @@
 
       <div class="field">
         <label for="designParts">Design Part Name(s) / Number(s) (required)</label>
-        <input id="designParts" type="text" required placeholder="Example: Panel A, Decal 1042-B" />
+        <input id="designParts" type="text" required placeholder="Example: B2405, X44 Engine Skid, All designs..." />
       </div>
 
       <div class="field proof-box">
@@ -121,8 +128,10 @@
 
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
     <script>
+      const queryParams = new URLSearchParams(window.location.search);
       const DEFAULT_APP_KEY = "51c30a2cb14666510ff4905d9d4eae07";
-      const APP_KEY = new URLSearchParams(window.location.search).get("appKey") || DEFAULT_APP_KEY;
+      const APP_KEY = queryParams.get("appKey") || DEFAULT_APP_KEY;
+      const CACHE_VERSION = queryParams.get("v") || "";
       const APP_NAME = "Customer Approval Gatekeeper";
       const APP_AUTHOR = "Syllable Agency";
 
@@ -132,7 +141,11 @@
       const PROOF_METHOD_UPLOAD = "upload";
       const PROOF_METHOD_SIGN = "sign";
       const DESTINATION_SETTINGS_KEY = "destinationSettings";
+      const CUSTOMER_LIST_SETTINGS_KEY = "customerList";
       const DEFAULT_TARGET_LIST_ID = "5d1393e0184e28237c1a59a6";
+      const CUSTOMER_NOT_LISTED = "NOT LISTED";
+      const DEFAULT_CUSTOMERS_URL =
+        `https://syllableagency.github.io/trello-powerup-upload-request/customers-default.json${CACHE_VERSION ? `?v=${encodeURIComponent(CACHE_VERSION)}` : ""}`;
 
       const t = window.TrelloPowerUp.iframe({
         appKey: APP_KEY,
@@ -142,6 +155,7 @@
 
       const $ = (id) => document.getElementById(id);
       let selectedProofFiles = [];
+      let customerOptions = [];
 
       function setBusy(isBusy) {
         $("form").classList.toggle("busy", isBusy);
@@ -152,6 +166,115 @@
       function setError(msg) { $("error").textContent = msg || ""; }
       function setAuthError(msg) { $("authError").textContent = msg || ""; }
       function setSuccess(msg) { $("success").textContent = msg || ""; }
+      function normalizeCustomerList(list) {
+        const values = Array.isArray(list) ? list : [];
+        const seen = new Map();
+
+        for (const rawValue of values) {
+          const value = String(rawValue || "").trim();
+          if (!value) continue;
+          const key = value.toLocaleLowerCase();
+          if (!seen.has(key)) {
+            seen.set(key, value);
+          }
+        }
+
+        seen.delete(CUSTOMER_NOT_LISTED.toLocaleLowerCase());
+        const sorted = Array.from(seen.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+        return [CUSTOMER_NOT_LISTED, ...sorted];
+      }
+      async function fetchDefaultCustomerList() {
+        const res = await fetch(DEFAULT_CUSTOMERS_URL, { headers: { "Accept": "application/json" } });
+        if (!res.ok) {
+          throw new Error(`Could not load default customers (HTTP ${res.status})`);
+        }
+        const data = await res.json();
+        return normalizeCustomerList(data);
+      }
+      async function getBoardCustomerList() {
+        const saved = await t.get("board", "shared", CUSTOMER_LIST_SETTINGS_KEY);
+        if (Array.isArray(saved) && saved.length) {
+          return normalizeCustomerList(saved);
+        }
+        return fetchDefaultCustomerList();
+      }
+      function renderCustomerOptions(list, selectedValue) {
+        const select = $("companySelect");
+        const previousValue = typeof selectedValue === "string" ? selectedValue : select.value;
+        const normalized = normalizeCustomerList(list);
+        customerOptions = normalized.slice();
+
+        select.innerHTML = "";
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Select a customer...";
+        select.appendChild(placeholder);
+
+        for (const customer of customerOptions) {
+          const opt = document.createElement("option");
+          opt.value = customer;
+          opt.textContent = customer;
+          select.appendChild(opt);
+        }
+
+        if (previousValue && customerOptions.includes(previousValue)) {
+          select.value = previousValue;
+        } else if (previousValue === CUSTOMER_NOT_LISTED) {
+          select.value = CUSTOMER_NOT_LISTED;
+        } else {
+          select.value = "";
+        }
+
+        updateCustomerSelectionUI();
+      }
+      function updateCustomerSelectionUI() {
+        const isNotListed = $("companySelect").value === CUSTOMER_NOT_LISTED;
+        $("companyCustomField").style.display = isNotListed ? "block" : "none";
+        $("companyCustom").required = isNotListed;
+        if (!isNotListed) {
+          $("companyCustom").value = "";
+        }
+      }
+      function getResolvedCustomerName() {
+        const selected = String($("companySelect").value || "").trim();
+        if (!selected) return "";
+        if (selected === CUSTOMER_NOT_LISTED) {
+          return String($("companyCustom").value || "").trim();
+        }
+        return selected;
+      }
+      async function saveBoardCustomerList(list) {
+        const normalized = normalizeCustomerList(list);
+        await t.set("board", "shared", CUSTOMER_LIST_SETTINGS_KEY, normalized);
+        customerOptions = normalized.slice();
+        return normalized;
+      }
+      async function maybeAddCustomerToBoardList(customerName) {
+        const trimmed = String(customerName || "").trim();
+        if (!trimmed || trimmed.toLocaleLowerCase() === CUSTOMER_NOT_LISTED.toLocaleLowerCase()) {
+          return;
+        }
+
+        const current = customerOptions.length ? customerOptions.slice() : await getBoardCustomerList();
+        const exists = current.some((item) => String(item).trim().toLocaleLowerCase() === trimmed.toLocaleLowerCase());
+        if (exists) return;
+
+        try {
+          const updated = await saveBoardCustomerList([...current, trimmed]);
+          renderCustomerOptions(updated, trimmed);
+        } catch (e) {
+          // Customer list auto-add is best effort and should not block approval submission.
+        }
+      }
+      async function loadCustomerOptions() {
+        try {
+          const list = await getBoardCustomerList();
+          renderCustomerOptions(list);
+        } catch (e) {
+          renderCustomerOptions([CUSTOMER_NOT_LISTED]);
+          setError("Could not load customer list. You can still choose NOT LISTED and enter a customer name.");
+        }
+      }
       function getProofMethod() {
         return $("proofSign").checked ? PROOF_METHOD_SIGN : PROOF_METHOD_UPLOAD;
       }
@@ -544,6 +667,7 @@
       // Wire up buttons
       $("btnClose").addEventListener("click", () => t.closeModal());
       $("btnCloseA").addEventListener("click", () => t.closeModal());
+      $("companySelect").addEventListener("change", updateCustomerSelectionUI);
       $("proofUpload").addEventListener("change", updateProofMethodUI);
       $("proofSign").addEventListener("change", updateProofMethodUI);
       $("file").addEventListener("change", syncSelectedFilesFromInput);
@@ -556,7 +680,10 @@
 
       // On render, show auth UI if needed
       t.render(async () => {
-        try { await ensureAuthorized(); }
+        try {
+          await loadCustomerOptions();
+          await ensureAuthorized();
+        }
         catch (e) { /* ignore */ }
       });
 
@@ -566,7 +693,8 @@
         setSuccess("");
 
         const approved = $("approved").checked;
-        const company = $("company").value.trim();
+        const companySelection = String($("companySelect").value || "").trim();
+        const company = getResolvedCustomerName();
         const contact = $("contact").value.trim();
         const designParts = $("designParts").value.trim();
         const proofMethod = getProofMethod();
@@ -574,7 +702,8 @@
 
         const problems = [];
         if (!approved) problems.push("- You must confirm the customer approved the design.");
-        if (!company) problems.push("- Customer Company is required.");
+        if (!companySelection) problems.push("- Customer Name is required.");
+        if (companySelection === CUSTOMER_NOT_LISTED && !company) problems.push("- Enter Customer Name is required when NOT LISTED is selected.");
         if (!contact) problems.push("- Customer Contact Name is required.");
         if (!designParts) problems.push("- Design Part Name(s) / Number(s) is required.");
         if (proofMethod === PROOF_METHOD_UPLOAD && !files.length) {
@@ -638,6 +767,9 @@
           // Save meta
           setStatus("Saving verification details...");
           await saveApprovalMeta(company, contact, designParts, proofMethod, attachmentDisplayNames, signerName);
+          if (companySelection === CUSTOMER_NOT_LISTED) {
+            await maybeAddCustomerToBoardList(company);
+          }
 
           if (proofMethod === PROOF_METHOD_UPLOAD) {
             setSuccess("Done. Approval proof uploaded, comment added, card marked Customer Approved, and moved to the destination list.");

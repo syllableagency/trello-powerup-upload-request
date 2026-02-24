@@ -7,7 +7,8 @@
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 14px; }
       .field { margin-bottom: 12px; }
       label { display:block; font-size: 13px; margin-bottom: 6px; }
-      select { width: 100%; padding: 8px; box-sizing: border-box; }
+      select, textarea { width: 100%; padding: 8px; box-sizing: border-box; }
+      textarea { min-height: 220px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
       .actions { display:flex; gap: 10px; margin-top: 14px; }
       button { padding: 9px 12px; cursor: pointer; }
       .error { color: #b42318; font-size: 13px; margin-top: 8px; white-space: pre-line; }
@@ -43,8 +44,14 @@
         </select>
       </div>
 
+      <div class="field">
+        <label for="customerListText">Customer List</label>
+        <textarea id="customerListText" placeholder="One customer per line"></textarea>
+        <div class="note">One customer per line. The list is saved alphabetically, and NOT LISTED is kept at the top automatically.</div>
+      </div>
+
       <div class="actions">
-        <button id="btnSave" type="submit">Save Destination</button>
+        <button id="btnSave" type="submit">Save Settings</button>
         <button id="btnClose" type="button">Close</button>
       </div>
 
@@ -56,11 +63,17 @@
 
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
     <script>
+      const queryParams = new URLSearchParams(window.location.search);
       const DEFAULT_APP_KEY = "51c30a2cb14666510ff4905d9d4eae07";
-      const APP_KEY = new URLSearchParams(window.location.search).get("appKey") || DEFAULT_APP_KEY;
+      const APP_KEY = queryParams.get("appKey") || DEFAULT_APP_KEY;
+      const CACHE_VERSION = queryParams.get("v") || "";
       const APP_NAME = "Customer Approval Gatekeeper";
       const APP_AUTHOR = "Syllable Agency";
       const DESTINATION_SETTINGS_KEY = "destinationSettings";
+      const CUSTOMER_LIST_SETTINGS_KEY = "customerList";
+      const CUSTOMER_NOT_LISTED = "NOT LISTED";
+      const DEFAULT_CUSTOMERS_URL =
+        `https://syllableagency.github.io/trello-powerup-upload-request/customers-default.json${CACHE_VERSION ? `?v=${encodeURIComponent(CACHE_VERSION)}` : ""}`;
 
       const t = window.TrelloPowerUp.iframe({
         appKey: APP_KEY,
@@ -84,6 +97,7 @@
       function setControlsEnabled(enabled) {
         $("boardSelect").disabled = !enabled;
         $("listSelect").disabled = !enabled;
+        $("customerListText").disabled = !enabled;
         $("btnSave").disabled = !enabled;
       }
 
@@ -192,6 +206,45 @@
         }
       }
 
+      function normalizeCustomerList(list) {
+        const values = Array.isArray(list) ? list : [];
+        const seen = new Map();
+
+        for (const rawValue of values) {
+          const value = String(rawValue || "").trim();
+          if (!value) continue;
+          const key = value.toLocaleLowerCase();
+          if (!seen.has(key)) {
+            seen.set(key, value);
+          }
+        }
+
+        seen.delete(CUSTOMER_NOT_LISTED.toLocaleLowerCase());
+        const sorted = Array.from(seen.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+        return [CUSTOMER_NOT_LISTED, ...sorted];
+      }
+
+      function parseCustomerListTextarea(text) {
+        const values = String(text || "")
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        return normalizeCustomerList(values);
+      }
+
+      function customerListToTextareaValue(list) {
+        return normalizeCustomerList(list).join("\n");
+      }
+
+      async function fetchDefaultCustomerList() {
+        const res = await fetch(DEFAULT_CUSTOMERS_URL, { headers: { "Accept": "application/json" } });
+        if (!res.ok) {
+          throw new Error(`Could not load default customers (HTTP ${res.status})`);
+        }
+        const data = await res.json();
+        return normalizeCustomerList(data);
+      }
+
       async function canWriteBoardSettings() {
         if (typeof t.memberCanWriteToModel !== "function") {
           return true;
@@ -226,8 +279,9 @@
         setSuccess("");
         setStatus("Loading settings...");
         const token = existingToken || await getToken();
-        const [saved, boardCtx, boards] = await Promise.all([
+        const [saved, savedCustomerList, boardCtx, boards] = await Promise.all([
           t.get("board", "shared", DESTINATION_SETTINGS_KEY),
+          t.get("board", "shared", CUSTOMER_LIST_SETTINGS_KEY),
           t.board("id"),
           fetchBoards(token)
         ]);
@@ -261,6 +315,18 @@
           }
           listSelect.value = savedListId;
         }
+
+        let customerList = [];
+        if (Array.isArray(savedCustomerList) && savedCustomerList.length) {
+          customerList = normalizeCustomerList(savedCustomerList);
+        } else {
+          try {
+            customerList = await fetchDefaultCustomerList();
+          } catch (e) {
+            customerList = [CUSTOMER_NOT_LISTED];
+          }
+        }
+        $("customerListText").value = customerListToTextareaValue(customerList);
 
         setStatus("");
       }
@@ -321,6 +387,7 @@
 
         const boardId = $("boardSelect").value;
         const listId = $("listSelect").value;
+        const customerList = parseCustomerListTextarea($("customerListText").value);
         if (!boardId || !listId) {
           setError("Please choose both destination board and destination list.");
           return;
@@ -330,14 +397,19 @@
         setStatus("Saving settings...");
         try {
           const member = await t.member("id");
-          await t.set("board", "shared", DESTINATION_SETTINGS_KEY, {
-            boardId,
-            listId,
-            updatedAt: new Date().toISOString(),
-            updatedBy: member?.id || ""
-          });
+          const nowIso = new Date().toISOString();
+          await Promise.all([
+            t.set("board", "shared", DESTINATION_SETTINGS_KEY, {
+              boardId,
+              listId,
+              updatedAt: nowIso,
+              updatedBy: member?.id || ""
+            }),
+            t.set("board", "shared", CUSTOMER_LIST_SETTINGS_KEY, customerList)
+          ]);
+          $("customerListText").value = customerListToTextareaValue(customerList);
           setStatus("");
-          setSuccess("Destination saved. Future approvals on this board will use this board/list.");
+          setSuccess("Settings saved. Future approvals on this board will use this destination and customer list.");
         } catch (err) {
           setStatus("");
           setError(err?.message || String(err));
