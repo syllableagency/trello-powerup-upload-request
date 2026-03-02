@@ -74,7 +74,7 @@
         <div class="field" id="companyCustomField" style="display:none;">
           <label for="companyCustom">Enter Customer Name (required)</label>
           <input id="companyCustom" type="text" />
-          <div class="note">This customer will be added to the customer list for future use.</div>
+          <div class="note">This name is used for this approval record only.</div>
         </div>
         <div class="field">
           <label for="contact">Customer Contact Name (required)</label>
@@ -141,7 +141,6 @@
       const PROOF_METHOD_UPLOAD = "upload";
       const PROOF_METHOD_SIGN = "sign";
       const DESTINATION_SETTINGS_KEY = "destinationSettings";
-      const CUSTOMER_LIST_SETTINGS_KEY = "customerList";
       const DEFAULT_TARGET_LIST_ID = "5d1393e0184e28237c1a59a6";
       const CUSTOMER_NOT_LISTED = "NOT LISTED";
       const DEFAULT_CUSTOMERS_URL =
@@ -192,10 +191,6 @@
         return normalizeCustomerList(data);
       }
       async function getBoardCustomerList() {
-        const saved = await t.get("board", "shared", CUSTOMER_LIST_SETTINGS_KEY);
-        if (Array.isArray(saved) && saved.length) {
-          return normalizeCustomerList(saved);
-        }
         return fetchDefaultCustomerList();
       }
       function renderCustomerOptions(list, selectedValue) {
@@ -242,29 +237,6 @@
           return String($("companyCustom").value || "").trim();
         }
         return selected;
-      }
-      async function saveBoardCustomerList(list) {
-        const normalized = normalizeCustomerList(list);
-        await t.set("board", "shared", CUSTOMER_LIST_SETTINGS_KEY, normalized);
-        customerOptions = normalized.slice();
-        return normalized;
-      }
-      async function maybeAddCustomerToBoardList(customerName) {
-        const trimmed = String(customerName || "").trim();
-        if (!trimmed || trimmed.toLocaleLowerCase() === CUSTOMER_NOT_LISTED.toLocaleLowerCase()) {
-          return;
-        }
-
-        const current = customerOptions.length ? customerOptions.slice() : await getBoardCustomerList();
-        const exists = current.some((item) => String(item).trim().toLocaleLowerCase() === trimmed.toLocaleLowerCase());
-        if (exists) return;
-
-        try {
-          const updated = await saveBoardCustomerList([...current, trimmed]);
-          renderCustomerOptions(updated, trimmed);
-        } catch (e) {
-          // Customer list auto-add is best effort and should not block approval submission.
-        }
       }
       async function loadCustomerOptions() {
         try {
@@ -804,9 +776,6 @@
           // Save meta
           setStatus("Saving verification details...");
           await saveApprovalMeta(company, contact, designParts, proofMethod, attachmentDisplayNames, signerName, approvalRecordedAt);
-          if (companySelection === CUSTOMER_NOT_LISTED) {
-            await maybeAddCustomerToBoardList(company);
-          }
 
           if (proofMethod === PROOF_METHOD_UPLOAD) {
             setSuccess("Done. Approval proof uploaded, comment added, card marked Customer Approved, and moved to the destination list.");
